@@ -72,6 +72,7 @@ import org.knime.core.node.InvalidSettingsException;
 import org.knime.core.node.NodeLogger;
 import org.knime.core.node.NodeSettingsRO;
 import org.knime.core.node.NodeSettingsWO;
+import org.knime.core.node.streamable.PortOutput;
 import org.knime.core.node.streamable.StreamableOperatorInternals;
 import org.knime.core.node.workflow.FlowVariable;
 import org.knime.core.node.workflow.FlowVariable.Type;
@@ -156,12 +157,11 @@ public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel 
     @Override
     protected BufferedDataTable[] execute(final BufferedDataTable[] inData, final ExecutionContext exec)
         throws Exception {
+
         m_snippet.setSettings(m_settings);
+        final BufferedDataTable output = m_snippet.execute(inData[0], m_flowVarRepository, exec);
 
-        final FlowVariableRepository flowVarRepo = new FlowVariableRepository(getAvailableInputFlowVariables());
-        final BufferedDataTable output = m_snippet.execute(inData[0], flowVarRepo, exec);
         pushModifiedFlowVariables();
-
         setWarningMessage(m_snippet.getWarningMessage());
 
         return new BufferedDataTable[]{output};
@@ -170,9 +170,17 @@ public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel 
     @Override
     protected ColumnRearranger createColumnRearranger(final DataTableSpec spec, final long rowCount)
         throws InvalidSettingsException {
+
         m_snippet.setSettings(m_settings);
-        final FlowVariableRepository flowVarRepo = new FlowVariableRepository(getAvailableInputFlowVariables());
-        return m_snippet.createRearranger(spec, flowVarRepo, (int)rowCount, null);
+        return m_snippet.createRearranger(spec, m_flowVarRepository, (int)rowCount, null);
+    }
+
+    @Override
+    public void finishStreamableExecution(final StreamableOperatorInternals internals, final ExecutionContext exec,
+        final PortOutput[] output) throws Exception {
+
+        pushModifiedFlowVariables();
+        setWarningMessage(m_snippet.getWarningMessage());
     }
 
     private boolean checkSnippetForText(final String fromGuard, final String toGuard, final String text) {
