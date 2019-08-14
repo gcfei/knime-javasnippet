@@ -48,6 +48,9 @@
  */
 package org.knime.base.node.jsnippet;
 
+import static org.knime.core.node.streamable.InputPortRole.DISTRIBUTED_STREAMABLE;
+import static org.knime.core.node.streamable.InputPortRole.NONDISTRIBUTED_STREAMABLE;
+
 import org.knime.core.data.DataTableSpec;
 import org.knime.core.data.container.ColumnRearranger;
 import org.knime.core.node.ExecutionContext;
@@ -61,7 +64,6 @@ import org.knime.core.node.streamable.PartitionInfo;
 import org.knime.core.node.streamable.PortInput;
 import org.knime.core.node.streamable.PortOutput;
 import org.knime.core.node.streamable.RowInput;
-import org.knime.core.node.streamable.StreamableFunction;
 import org.knime.core.node.streamable.StreamableOperator;
 import org.knime.core.node.streamable.StreamableOperatorInternals;
 import org.knime.core.node.streamable.simple.SimpleStreamableOperatorInternals;
@@ -73,6 +75,7 @@ import org.knime.core.node.util.CheckUtils;
  * row index is used (i.e. only streaming possible but no distribution).
  *
  * @author Martin Horn
+ * @author Marc Bux, KNIME GmbH, Berlin, Germany
  */
 public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
 
@@ -86,79 +89,48 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
         super(1, 1);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public StreamableOperatorInternals createInitialStreamableOperatorInternals() {
         return new SimpleStreamableOperatorInternals();
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public boolean iterate(final StreamableOperatorInternals internals) {
-        if (usesRowCount()) {
-            SimpleStreamableOperatorInternals simpleInternals = (SimpleStreamableOperatorInternals)internals;
-            if (simpleInternals.getConfig().containsKey(CFG_ROW_COUNT)) {
-                //already iterated
-                return false;
-            } else {
-                //needs one iteration to determine the row count
-                return true;
-            }
-        } else {
-            return false;
-        }
+        return usesRowCount() && !((SimpleStreamableOperatorInternals)internals).getConfig().containsKey(CFG_ROW_COUNT);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    public StreamableOperator createStreamableOperator(final PartitionInfo partitionInfo, final PortObjectSpec[] inSpecs)
-        throws InvalidSettingsException {
+    public StreamableOperator createStreamableOperator(final PartitionInfo partitionInfo,
+        final PortObjectSpec[] inSpecs) throws InvalidSettingsException {
+
         return new StreamableOperator() {
 
             private SimpleStreamableOperatorInternals m_internals;
 
-            /**
-             * {@inheritDoc}
-             */
             @Override
             public void loadInternals(final StreamableOperatorInternals internals) {
-                m_internals = (SimpleStreamableOperatorInternals) internals;
+                m_internals = (SimpleStreamableOperatorInternals)internals;
             }
 
-            /**
-             * {@inheritDoc}
-             */
             @Override
             public void runIntermediate(final PortInput[] inputs, final ExecutionContext exec) throws Exception {
                 //count number of rows
                 long count = 0;
-                RowInput rowInput = (RowInput) inputs[0];
-                while(rowInput.poll()!=null) {
+                final RowInput rowInput = (RowInput)inputs[0];
+                while (rowInput.poll() != null) {
                     count++;
                 }
                 m_internals.getConfig().addLong(CFG_ROW_COUNT, count);
             }
 
             @Override
-            public void runFinal(final PortInput[] inputs, final PortOutput[] outputs, final ExecutionContext exec) throws Exception {
-                long rowCount = -1;
-                if (m_internals.getConfig().containsKey(CFG_ROW_COUNT)) {
-                    rowCount = m_internals.getConfig().getLong(CFG_ROW_COUNT);
-                }
-                StreamableFunction func =
-                    createColumnRearranger((DataTableSpec)inSpecs[0], rowCount).createStreamableFunction();
-                func.runFinal(inputs, outputs, exec);
+            public void runFinal(final PortInput[] inputs, final PortOutput[] outputs, final ExecutionContext exec)
+                throws Exception {
+                final long rowCount = m_internals.getConfig().getLong(CFG_ROW_COUNT, -1);
+                final ColumnRearranger columnRearranger = createColumnRearranger((DataTableSpec)inSpecs[0], rowCount);
+                columnRearranger.createStreamableFunction().runFinal(inputs, outputs, exec);
             }
 
-            /**
-             * {@inheritDoc}
-             */
             @Override
             public StreamableOperatorInternals saveInternals() {
                 return m_internals;
@@ -166,22 +138,16 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
         };
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public MergeOperator createMergeOperator() {
         return new MergeOperator() {
 
-            /**
-             * {@inheritDoc}
-             */
             @Override
             public StreamableOperatorInternals mergeIntermediate(final StreamableOperatorInternals[] operators) {
                 //sum up the row counts if necessary
                 long count = 0;
-                for (int i = 0; i < operators.length; i++) {
-                    SimpleStreamableOperatorInternals simpleInternals = (SimpleStreamableOperatorInternals)operators[i];
+                for (StreamableOperatorInternals op : operators) {
+                    final SimpleStreamableOperatorInternals simpleInternals = (SimpleStreamableOperatorInternals)op;
                     CheckUtils.checkState(simpleInternals.getConfig().containsKey(CFG_ROW_COUNT),
                         "Config for key " + CFG_ROW_COUNT + " isn't set.");
                     try {
@@ -192,7 +158,7 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
                     }
                 }
 
-                SimpleStreamableOperatorInternals res = new SimpleStreamableOperatorInternals();
+                final SimpleStreamableOperatorInternals res = new SimpleStreamableOperatorInternals();
                 if (count > 0) {
                     res.getConfig().addLong(CFG_ROW_COUNT, count);
                 }
@@ -207,35 +173,17 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
         };
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public void finishStreamableExecution(final StreamableOperatorInternals internals, final ExecutionContext exec,
         final PortOutput[] output) throws Exception {
         // nothing to do here
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public InputPortRole[] getInputPortRoles() {
-        InputPortRole inputPortRole = InputPortRole.DISTRIBUTED_STREAMABLE;
-        if (usesRowIndex()) {
-            //rowindex field is used, cannot be distributed
-            inputPortRole = InputPortRole.NONDISTRIBUTED_STREAMABLE;
-        }
-        if (usesRowCount()) {
-            //rowcount field is used -> streaming actually not possible (because iteration required) but distributed execution
-            inputPortRole = InputPortRole.DISTRIBUTED_STREAMABLE;
-        }
-        return new InputPortRole[]{inputPortRole};
+        return new InputPortRole[]{usesRowIndex() || isStateful() ? NONDISTRIBUTED_STREAMABLE : DISTRIBUTED_STREAMABLE};
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     public OutputPortRole[] getOutputPortRoles() {
         return new OutputPortRole[]{OutputPortRole.DISTRIBUTED};
@@ -258,6 +206,26 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
     protected abstract boolean usesRowCount();
 
     /**
+     * Checks whether the node preserves state in between calculations. If it does, the node cannot be executed in
+     * distributed fashion.
+     *
+     * @return true iff the node is stateful
+     */
+    protected boolean isStateful() {
+        return false;
+    }
+
+    /**
+     * Checks whether the node emits flow variables. If it does, computation has to finish and flow variables have to be
+     * pushed before downstream nodes can commence with their computation.
+     *
+     * @return true iff the node emits flow variables
+     */
+    protected boolean emitsFlowVariables() {
+        return false;
+    }
+
+    /**
      * Creates a column rearranger that describes the changes to the input table. Sub classes will check the consistency
      * of the input table with their settings (fail with {@link InvalidSettingsException} if necessary) and then return
      * a customized {@link ColumnRearranger}.
@@ -269,4 +237,5 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
      */
     protected abstract ColumnRearranger createColumnRearranger(final DataTableSpec spec, long rowCount)
         throws InvalidSettingsException;
+
 }

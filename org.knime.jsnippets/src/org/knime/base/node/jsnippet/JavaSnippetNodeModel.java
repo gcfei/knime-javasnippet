@@ -47,13 +47,18 @@
  */
 package org.knime.base.node.jsnippet;
 
+import static org.knime.base.node.jsnippet.JavaSnippet.ROWCOUNT;
+import static org.knime.base.node.jsnippet.JavaSnippet.ROWINDEX;
+import static org.knime.base.node.jsnippet.guarded.JavaSnippetDocument.GUARDED_BODY_END;
+import static org.knime.base.node.jsnippet.guarded.JavaSnippetDocument.GUARDED_BODY_START;
+import static org.knime.base.node.jsnippet.guarded.JavaSnippetDocument.GUARDED_FIELDS;
+
 import java.io.File;
 import java.io.IOException;
 
 import javax.swing.text.BadLocationException;
 
 import org.apache.commons.lang3.StringUtils;
-import org.knime.base.node.jsnippet.guarded.JavaSnippetDocument;
 import org.knime.base.node.jsnippet.util.FlowVariableRepository;
 import org.knime.base.node.jsnippet.util.JavaSnippetSettings;
 import org.knime.base.node.jsnippet.util.ValidationReport;
@@ -64,21 +69,27 @@ import org.knime.core.node.CanceledExecutionException;
 import org.knime.core.node.ExecutionContext;
 import org.knime.core.node.ExecutionMonitor;
 import org.knime.core.node.InvalidSettingsException;
+import org.knime.core.node.NodeLogger;
 import org.knime.core.node.NodeSettingsRO;
 import org.knime.core.node.NodeSettingsWO;
+import org.knime.core.node.streamable.StreamableOperatorInternals;
 import org.knime.core.node.workflow.FlowVariable;
 import org.knime.core.node.workflow.FlowVariable.Type;
-
 
 /**
  * The node model of the java snippet node.
  *
  * @author Heiko Hofer
+ * @author Marc Bux, KNIME GmbH, Berlin, Germany
  */
 public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel {
 
     private final JavaSnippetSettings m_settings;
+
     private final JavaSnippet m_snippet;
+
+    private FlowVariableRepository m_flowVarRepository;
+
     /**
      * Create a new instance.
      */
@@ -88,159 +99,129 @@ public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel 
         m_snippet.attachLogger(getLogger());
     }
 
-    /**
-     * {@inheritDoc}
-     */
+    private void pushModifiedFlowVariables() {
+        for (final FlowVariable flowVar : m_flowVarRepository.getModified()) {
+            final Type type = flowVar.getType();
+            if (type.equals(Type.INTEGER)) {
+                pushFlowVariableInt(flowVar.getName(), flowVar.getIntValue());
+            } else if (type.equals(Type.DOUBLE)) {
+                pushFlowVariableDouble(flowVar.getName(), flowVar.getDoubleValue());
+            } else { // case: type.equals(Type.STRING)
+                pushFlowVariableString(flowVar.getName(), flowVar.getStringValue());
+            }
+        }
+    }
+
     @Override
-    protected DataTableSpec[] configure(final DataTableSpec[] inSpecs)
-            throws InvalidSettingsException {
+    protected DataTableSpec[] configure(final DataTableSpec[] inSpecs) throws InvalidSettingsException {
         m_snippet.setSettings(m_settings);
 
-        FlowVariableRepository flowVarRepository =
-            new FlowVariableRepository(getAvailableInputFlowVariables());
+        m_flowVarRepository = new FlowVariableRepository(getAvailableInputFlowVariables());
         // The following method also compile-checks the code and checks for missing converter factories
-        ValidationReport report = m_snippet.validateSettings(inSpecs[0],
-                flowVarRepository);
+        final ValidationReport report = m_snippet.validateSettings(inSpecs[0], m_flowVarRepository);
         if (report.hasWarnings()) {
             setWarningMessage(StringUtils.join(report.getWarnings(), "\n"));
         }
         if (report.hasErrors()) {
-            throw new InvalidSettingsException(
-                    StringUtils.join(report.getErrors(), "\n"));
+            throw new InvalidSettingsException(StringUtils.join(report.getErrors(), "\n"));
         }
+        final DataTableSpec outSpec = m_snippet.configure(inSpecs[0], m_flowVarRepository);
+        pushModifiedFlowVariables();
 
-
-        DataTableSpec outSpec = m_snippet.configure(inSpecs[0],
-                flowVarRepository);
-        for (FlowVariable flowVar : flowVarRepository.getModified()) {
-            if (flowVar.getType().equals(Type.INTEGER)) {
-                pushFlowVariableInt(flowVar.getName(), flowVar.getIntValue());
-            } else if (flowVar.getType().equals(Type.DOUBLE)) {
-                pushFlowVariableDouble(flowVar.getName(),
-                        flowVar.getDoubleValue());
-            } else {
-                pushFlowVariableString(flowVar.getName(),
-                        flowVar.getStringValue());
-            }
-        }
-        return new DataTableSpec[] {outSpec};
+        return new DataTableSpec[]{outSpec};
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    protected BufferedDataTable[] execute(final BufferedDataTable[] inData,
-            final ExecutionContext exec) throws Exception {
+    public StreamableOperatorInternals createInitialStreamableOperatorInternals() {
+        final NodeLogger log = getLogger();
+
+        if (emitsFlowVariables()) {
+            log.info("Flow variables are emitted by the snippet.");
+            log.info("The snippet could be stateful and cannot be streamed in distributed manner.");
+            log.info("Also, all output tables will have to be cached before downstream nodes can commence execution");
+        } else if (isStateful()) {
+            log.info("Global variables are defined in the snippet.");
+            log.info("The snippet could be stateful and cannot be streamed in distributed manner.");
+        } else if (usesRowIndex()) {
+            log.info("The ROWINDEX field is used in the snippet. Calculations cannot be done in distributed manner.");
+        }
+
+        if (usesRowCount()) {
+            log.info("The ROWCOUNT field is used in the snippet. An additional iteration is required for streaming.");
+        }
+
+        return super.createInitialStreamableOperatorInternals();
+    }
+
+    @Override
+    protected BufferedDataTable[] execute(final BufferedDataTable[] inData, final ExecutionContext exec)
+        throws Exception {
         m_snippet.setSettings(m_settings);
 
-        FlowVariableRepository flowVarRepo =
-            new FlowVariableRepository(getAvailableInputFlowVariables());
-        BufferedDataTable output = m_snippet.execute(inData[0],
-                flowVarRepo, exec);
-        for (FlowVariable var : flowVarRepo.getModified()) {
-            Type type = var.getType();
-            if (type.equals(Type.INTEGER)) {
-                pushFlowVariableInt(var.getName(), var.getIntValue());
-            } else if (type.equals(Type.DOUBLE)) {
-                pushFlowVariableDouble(var.getName(), var.getDoubleValue());
-            } else { // case: type.equals(Type.STRING)
-                pushFlowVariableString(var.getName(), var.getStringValue());
-            }
-        }
+        final FlowVariableRepository flowVarRepo = new FlowVariableRepository(getAvailableInputFlowVariables());
+        final BufferedDataTable output = m_snippet.execute(inData[0], flowVarRepo, exec);
+        pushModifiedFlowVariables();
 
         setWarningMessage(m_snippet.getWarningMessage());
 
-
-        return new BufferedDataTable[] {output};
+        return new BufferedDataTable[]{output};
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     protected ColumnRearranger createColumnRearranger(final DataTableSpec spec, final long rowCount)
         throws InvalidSettingsException {
         m_snippet.setSettings(m_settings);
-        final FlowVariableRepository flowVarRepo =
-                new FlowVariableRepository(getAvailableInputFlowVariables());
-        return m_snippet.createRearranger(spec, flowVarRepo, (int) rowCount, null);
+        final FlowVariableRepository flowVarRepo = new FlowVariableRepository(getAvailableInputFlowVariables());
+        return m_snippet.createRearranger(spec, flowVarRepo, (int)rowCount, null);
     }
 
+    private boolean checkSnippetForText(final String fromGuard, final String toGuard, final String text) {
+        try {
+            final String snippetCode = m_snippet.getDocument().getTextBetween(fromGuard, toGuard);
 
-    /**
-     * {@inheritDoc}
-     */
+            return snippetCode.contains(text);
+        } catch (BadLocationException e) {
+            //should not happen -> implementation error
+            throw new RuntimeException("Most likely an implementation error.", e);
+        }
+    }
+
     @Override
     protected boolean usesRowIndex() {
-        //is there a better test?
-        try {
-            String snippetCode = m_snippet.getDocument().getTextBetween(JavaSnippetDocument.GUARDED_BODY_START,
-                JavaSnippetDocument.GUARDED_BODY_END);
-            boolean uses = snippetCode.contains(JavaSnippet.ROWINDEX);
-            if (uses) {
-                getLogger().warn(
-                    "The ROWINDEX field is used in the snippet. Calculations cannot be done in distributed manner!");
-            }
-            return uses;
-        } catch (BadLocationException e) {
-            //should not happen -> implementation error
-            throw new RuntimeException("Most likely an implementation error.", e);
-        }
-
+        return checkSnippetForText(GUARDED_BODY_START, GUARDED_BODY_END, ROWINDEX);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     protected boolean usesRowCount() {
-        //is there a better test?
-        try {
-            String snippetCode = m_snippet.getDocument().getTextBetween(JavaSnippetDocument.GUARDED_BODY_START,
-                JavaSnippetDocument.GUARDED_BODY_END);
-            boolean uses = snippetCode.contains(JavaSnippet.ROWCOUNT);
-            if (uses) {
-                getLogger()
-                    .warn("The ROWCOUNT field is used in the snippet. Calculations cannot be done in streamed manner!");
-            }
-            return uses;
-        } catch (BadLocationException e) {
-            //should not happen -> implementation error
-            throw new RuntimeException("Most likely an implementation error.", e);
-        }
+        return checkSnippetForText(GUARDED_BODY_START, GUARDED_BODY_END, ROWCOUNT);
     }
 
-    /**
-     * {@inheritDoc}
-     */
+    @Override
+    protected boolean isStateful() {
+        return emitsFlowVariables() || checkSnippetForText(GUARDED_FIELDS, GUARDED_BODY_START, ";");
+    }
+
+    @Override
+    protected boolean emitsFlowVariables() {
+        return m_flowVarRepository.getModified().size() > 0;
+    }
+
     @Override
     protected void saveSettingsTo(final NodeSettingsWO settings) {
         m_settings.saveSettings(settings);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    protected void validateSettings(final NodeSettingsRO settings)
-            throws InvalidSettingsException {
-        JavaSnippetSettings s = new JavaSnippetSettings();
+    protected void validateSettings(final NodeSettingsRO settings) throws InvalidSettingsException {
+        final JavaSnippetSettings s = new JavaSnippetSettings();
         s.loadSettings(settings);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    protected void loadValidatedSettingsFrom(final NodeSettingsRO settings)
-            throws InvalidSettingsException {
+    protected void loadValidatedSettingsFrom(final NodeSettingsRO settings) throws InvalidSettingsException {
         m_settings.loadSettings(settings);
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
     protected void reset() {
         // no internals, nothing to reset.
@@ -252,23 +233,15 @@ public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel 
         m_snippet.invalidate();
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    protected void loadInternals(final File nodeInternDir,
-            final ExecutionMonitor exec)
-            throws IOException, CanceledExecutionException {
+    protected void loadInternals(final File nodeInternDir, final ExecutionMonitor exec)
+        throws IOException, CanceledExecutionException {
         // no internals.
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    protected void saveInternals(final File nodeInternDir,
-            final ExecutionMonitor exec)
-            throws IOException, CanceledExecutionException {
+    protected void saveInternals(final File nodeInternDir, final ExecutionMonitor exec)
+        throws IOException, CanceledExecutionException {
         // no internals.
     }
 }
