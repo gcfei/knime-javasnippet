@@ -51,12 +51,16 @@ package org.knime.base.node.jsnippet;
 import static org.knime.core.node.streamable.InputPortRole.DISTRIBUTED_STREAMABLE;
 import static org.knime.core.node.streamable.InputPortRole.NONDISTRIBUTED_STREAMABLE;
 
+import org.knime.core.data.DataRow;
 import org.knime.core.data.DataTableSpec;
 import org.knime.core.data.container.ColumnRearranger;
+import org.knime.core.node.BufferedDataContainer;
 import org.knime.core.node.ExecutionContext;
 import org.knime.core.node.InvalidSettingsException;
 import org.knime.core.node.NodeModel;
 import org.knime.core.node.port.PortObjectSpec;
+import org.knime.core.node.streamable.BufferedDataTableRowOutput;
+import org.knime.core.node.streamable.DataTableRowInput;
 import org.knime.core.node.streamable.InputPortRole;
 import org.knime.core.node.streamable.MergeOperator;
 import org.knime.core.node.streamable.OutputPortRole;
@@ -64,6 +68,8 @@ import org.knime.core.node.streamable.PartitionInfo;
 import org.knime.core.node.streamable.PortInput;
 import org.knime.core.node.streamable.PortOutput;
 import org.knime.core.node.streamable.RowInput;
+import org.knime.core.node.streamable.RowOutput;
+import org.knime.core.node.streamable.StreamableFunction;
 import org.knime.core.node.streamable.StreamableOperator;
 import org.knime.core.node.streamable.StreamableOperatorInternals;
 import org.knime.core.node.streamable.simple.SimpleStreamableOperatorInternals;
@@ -127,8 +133,24 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
             public void runFinal(final PortInput[] inputs, final PortOutput[] outputs, final ExecutionContext exec)
                 throws Exception {
                 final long rowCount = m_internals.getConfig().getLong(CFG_ROW_COUNT, -1);
-                final ColumnRearranger columnRearranger = createColumnRearranger((DataTableSpec)inSpecs[0], rowCount);
-                columnRearranger.createStreamableFunction().runFinal(inputs, outputs, exec);
+                final ColumnRearranger rearr = createColumnRearranger((DataTableSpec)inSpecs[0], rowCount);
+                final StreamableFunction func = rearr.createStreamableFunction();
+                if (emitsFlowVariables()) {
+                    final BufferedDataContainer dc = exec.createDataContainer(rearr.createSpec());
+                    final BufferedDataTableRowOutput bdtOutput = new BufferedDataTableRowOutput(dc);
+                    func.runFinal(inputs, new PortOutput[]{bdtOutput}, exec);
+                    bdtOutput.close();
+                    final DataTableRowInput dtInput = new DataTableRowInput(bdtOutput.getDataTable());
+                    final RowOutput rowOutput = ((RowOutput)outputs[0]);
+                    DataRow inputRow;
+                    while ((inputRow = dtInput.poll()) != null) {
+                        rowOutput.push(inputRow);
+                    }
+                    dtInput.close();
+                    rowOutput.close();
+                } else {
+                    func.runFinal(inputs, outputs, exec);
+                }
             }
 
             @Override
