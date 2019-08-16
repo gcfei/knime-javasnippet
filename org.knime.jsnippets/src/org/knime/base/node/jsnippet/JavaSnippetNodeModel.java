@@ -100,7 +100,8 @@ public class JavaSnippetNodeModel extends AbstractConditionalStreamingNodeModel 
         m_snippet.attachLogger(getLogger());
     }
 
-    private void pushModifiedFlowVariables() {
+    @Override
+    protected void pushModifiedFlowVariables() {
         for (final FlowVariable flowVar : m_flowVarRepository.getModified()) {
             final Type type = flowVar.getType();
             if (type.equals(Type.INTEGER)) {

@@ -95,6 +95,9 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
         super(1, 1);
     }
 
+    protected void pushModifiedFlowVariables() {
+    }
+
     @Override
     public StreamableOperatorInternals createInitialStreamableOperatorInternals() {
         return new SimpleStreamableOperatorInternals();
@@ -140,6 +143,7 @@ public abstract class AbstractConditionalStreamingNodeModel extends NodeModel {
                     final BufferedDataTableRowOutput bdtOutput = new BufferedDataTableRowOutput(dc);
                     func.runFinal(inputs, new PortOutput[]{bdtOutput}, exec);
                     bdtOutput.close();
+                    pushModifiedFlowVariables();
                     final DataTableRowInput dtInput = new DataTableRowInput(bdtOutput.getDataTable());
                     final RowOutput rowOutput = ((RowOutput)outputs[0]);
                     DataRow inputRow;
