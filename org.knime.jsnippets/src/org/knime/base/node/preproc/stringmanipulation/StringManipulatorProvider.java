@@ -116,7 +116,7 @@ import org.knime.base.node.preproc.stringmanipulation.manipulator.ToLongManipula
 import org.knime.base.node.preproc.stringmanipulation.manipulator.ToNullManipulator;
 import org.knime.base.node.preproc.stringmanipulation.manipulator.UpperCaseManipulator;
 import org.knime.base.node.preproc.stringmanipulation.manipulator.UrlEncoderManipulator;
-import org.knime.base.node.preproc.stringmanipulation.manipulator.UrlEncoderWithCharsetManipulator;
+import org.knime.base.node.preproc.stringmanipulation.manipulator.UrlEncoderScopeManipulator;
 import org.knime.base.node.util.ManipulatorProvider;
 import org.knime.core.node.KNIMEConstants;
 import org.knime.core.util.FileUtil;
@@ -211,7 +211,7 @@ public final class StringManipulatorProvider implements ManipulatorProvider {
         manipulators.add(new PadLeftCharsManipulator());
         manipulators.add(new PadRightCharsManipulator());
         manipulators.add(new UrlEncoderManipulator());
-        manipulators.add(new UrlEncoderWithCharsetManipulator());
+        manipulators.add(new UrlEncoderScopeManipulator());
 
         Set<String> categories = new TreeSet<String>();
         for (Manipulator m : manipulators) {

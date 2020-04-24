@@ -52,24 +52,26 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Escapes characters that are not allowed in an URL by replacing them with ASCII characters using
- * {@link URLEncoder#encode(String, String)} and the UTF-8 character set.
+ * Applies characters that are not allowed or reserved in an URL by applying percent encoding.
+ * This replaces the octet (8 bits) by a character triplet starting with a percent sign, e.g., " " -> "%20" or
+ * "/" -> "%2F", "?" -> "%3F". Uses the {@link URLEncoder#encode(String, String)} and the UTF-8 character set.
  *
  * @author Carl Witt, KNIME AG, Zurich, Switzerland
  * @since 4.2
  */
 public class UrlEncoderManipulator extends AbstractDefaultToStringManipulator {
 
-    private final static String utf8 = StandardCharsets.UTF_8.name();
+    /** The name of the character set that by default used to encode strings. */
+    protected final static String DEFAULT_CHARSET_NAME = StandardCharsets.UTF_8.name();
+
     /**
      * Replaces characters not allowed in an URL by ASCII characters.
-
      * @param str the string
      * @return the escaped string
      */
     public static String urlEncode(final String str) {
         try {
-            return URLEncoder.encode(str, utf8);
+            return URLEncoder.encode(str, DEFAULT_CHARSET_NAME);
         } catch (UnsupportedEncodingException e) {
             return null;
         }
@@ -114,7 +116,8 @@ public class UrlEncoderManipulator extends AbstractDefaultToStringManipulator {
      */
     @Override
     public String getDescription() {
-        return "Replaces characters that are not allowed in an URL. <br/><br/>" +
+        return "Replaces forbidden characters in a URL. This includes non-ascii characters (e.g., umlaut) and "
+                + "reserved characters (e.g., ? is reserved to denote the query part of a URL). <br/><br/>" +
                 "The resulting string is percent encoded, i.e., " +
                 "non-alphanumeric values are replaced as shown below. The resulting string is safe to use in a HTTP " +
                 "POST request, as it would be for instance when sending data via an HTML form "
@@ -139,9 +142,9 @@ public class UrlEncoderManipulator extends AbstractDefaultToStringManipulator {
                 "    </tr>" +
                 "    <tr>" +
                 "        <td>" +
-                "        urlEncode(\"What's the time?\")</td>" +
+                "        join(\"https://hub.knime.com/search?\", urlEncode(\"q=what's new?\"))</td>" +
                 "        <td>" +
-                "        =&nbsp;\"What%27s+the+time%3F\"</td>" +
+                "        =&nbsp;\"https://hub.knime.com/search?q%3Dwhat%27s%20new%3F</td>" +
                 "    </tr>" +
                 "</table>";
     }
